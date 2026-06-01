@@ -8,6 +8,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ==========================================
+      # 1. 优先清理磁盘空间（放在最前面，且不破坏后续工具链）
+      # ==========================================
+      - name: Free Disk Space (Cleanup)
+        run: |
+          echo "Before cleanup disk space:"
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          echo "After cleanup disk space:"
+          df -h
+
+      # ==========================================
+      # 2. 基础环境准备
+      # ==========================================
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -17,16 +33,8 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Free Disk Space (Cleanup)
-        # 释放磁盘空间，防止大文件解压时空间不足
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-
       - name: Download APK from Custom Link
-        # 注意：此处链接必须用双引号包裹，防止其中的 & 符号被识别为后台运行命令
+        # 此处链接必须用双引号包裹，防止其中的 & 符号被识别为后台运行命令
         run: |
           mkdir -p workspace
           cd workspace
@@ -36,7 +44,7 @@ jobs:
           du -sh target.apk
 
       # ==========================================
-      # 方案 A：使用 Apktool 转换为 Smali (非常稳定)
+      # 3. 使用 Apktool 转换为 Smali (非常稳定)
       # ==========================================
       - name: Install Apktool
         run: |
@@ -45,6 +53,7 @@ jobs:
           chmod +x bin/apktool
           # 自动获取最新 apktool.jar 的版本并下载
           APKTOOL_VERSION=$(curl -s https://api.github.com/repos/iBotPeaches/Apktool/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+          curl -L "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" -o bin/apktool.jar || \
           curl -L "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" -o bin/apktool.jar
           echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
 
@@ -55,7 +64,7 @@ jobs:
           apktool d target.apk -o decompiled_smali
 
       # ==========================================
-      # 方案 B：使用 JADX 转换为 Java 源码 (可选，由于内存限制有可能崩溃)
+      # 4. 使用 JADX 转换为 Java 源码 (此时 Java 运行环境已安全)
       # ==========================================
       - name: Install JADX
         run: |
@@ -63,7 +72,7 @@ jobs:
           curl -L "https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip" -o jadx.zip
           unzip -d bin/jadx jadx.zip
           
-          # ====== 核心修复：递归赋予 JADX 目录下所有的脚本可执行权限 ======
+          # 递归赋予 JADX 目录下所有的脚本可执行权限
           chmod -R +x bin/jadx/bin
           
           echo "$GITHUB_WORKSPACE/bin/jadx/bin" >> $GITHUB_PATH
@@ -78,7 +87,7 @@ jobs:
           jadx -d decompiled_java --no-res --threads-count 1 target.apk || echo "JADX encountered warning/errors, continuing..."
 
       # ==========================================
-      # 打包与上传产物
+      # 5. 打包与上传产物
       # ==========================================
       - name: Zip Decompiled Files
         run: |
