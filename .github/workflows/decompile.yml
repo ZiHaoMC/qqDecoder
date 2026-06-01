@@ -51,10 +51,14 @@ jobs:
           mkdir -p bin
           curl -L "https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool" -o bin/apktool
           chmod +x bin/apktool
+          
           # 自动获取最新 apktool.jar 的版本并下载
           APKTOOL_VERSION=$(curl -s https://api.github.com/repos/iBotPeaches/Apktool/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
-          curl -L "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" -o bin/apktool.jar || \
-          curl -L "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" -o bin/apktool.jar
+          echo "Installing Apktool version: $APKTOOL_VERSION"
+          
+          # 修正链接，并使用 -f 参数。如果失败则立刻报错
+          curl -f -L "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" -o bin/apktool.jar
+          
           echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
 
       - name: Decompile with Apktool (Smali & Resources)
@@ -64,7 +68,7 @@ jobs:
           apktool d target.apk -o decompiled_smali
 
       # ==========================================
-      # 4. 使用 JADX 转换为 Java 源码 (此时 Java 运行环境已安全)
+      # 4. 使用 JADX 转换为 Java 源码
       # ==========================================
       - name: Install JADX
         run: |
