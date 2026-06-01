@@ -68,48 +68,7 @@ jobs:
           apktool d target.apk -o decompiled_smali
 
       # ==========================================
-      # 4. 安装 dex2jar 并物理裁剪包结构 (解除硬编码内存限制)
-      # ==========================================
-      - name: Install dex2jar
-        run: |
-          curl -L "https://github.com/pxb1988/dex2jar/releases/download/v2.4/dex-tools-v2.4.zip" -o dex-tools.zip
-          unzip dex-tools.zip
-          
-          # ====== 核心修复：通过 sed 替换脚本中硬编码的低内存设置 (Xmx1024m/2048m -> Xmx5g) ======
-          sed -i 's/-Xmx[0-9]*[mg]/-Xmx5g/g' dex-tools-v2.4/d2j_invoke.sh
-          
-          chmod +x dex-tools-v2.4/*.sh
-          echo "$GITHUB_WORKSPACE/dex-tools-v2.4" >> $GITHUB_PATH
-
-      - name: Convert APK to JAR and Crop Package
-        run: |
-          cd workspace
-          echo "Converting APK to JAR..."
-          d2j-dex2jar.sh -f target.apk -o full_classes.jar
-          
-          echo "Unzipping JAR for physical cropping..."
-          mkdir -p jar_extracted
-          unzip -q full_classes.jar -d jar_extracted
-          
-          echo "Cropping packages: removing everything except 'com/tencent/mobileqq'..."
-          cd jar_extracted
-          # 第一层：保留 com 目录，删除其他（如 android, androidx, kotlin, okhttp 等）
-          find . -mindepth 1 -maxdepth 1 ! -name 'com' -exec rm -rf {} +
-          # 第二层：保留 tencent 目录，删除其他
-          cd com
-          find . -mindepth 1 -maxdepth 1 ! -name 'tencent' -exec rm -rf {} +
-          # 第三层：保留 mobileqq 目录，删除其他
-          cd tencent
-          find . -mindepth 1 -maxdepth 1 ! -name 'mobileqq' -exec rm -rf {} +
-          cd ../..
-          
-          echo "Zipping the cropped directory back to a filtered JAR..."
-          zip -q -r ../filtered.jar .
-          cd ..
-          echo "Secondary crop completed."
-
-      # ==========================================
-      # 5. 安装 JADX 并反编译裁剪后的精简 JAR 包 (安全高效)
+      # 4. 安装 JADX 工具
       # ==========================================
       - name: Install JADX
         run: |
@@ -122,14 +81,41 @@ jobs:
           
           echo "$GITHUB_WORKSPACE/bin/jadx/bin" >> $GITHUB_PATH
 
-      - name: Decompile with JADX (Filtered JAR to Java)
-        # 此时 JADX 面对的是一个极度精简的 filtered.jar，5.5G 堆内存能以极快的速度安全跑完
-        env:
-          JAVA_OPTS: "-Xmx5500m"
+      # ==========================================
+      # 5. 单 DEX 轮询反编译并实时合并目录 (核心安全步骤)
+      # ==========================================
+      - name: Extract DEX files and Decompile One-by-One
         run: |
           cd workspace
-          echo "Decompiling cropped JAR to Java..."
-          jadx -d decompiled_java --no-res --threads-count 1 filtered.jar || echo "JADX encountered warning/errors, continuing..."
+          echo "Unzipping DEX files from APK..."
+          unzip -q target.apk "classes*.dex" -d dex_extracted
+          
+          # 创建用于存放合并后 Java 代码的最终目录
+          mkdir -p java_final/com/tencent/mobileqq
+          
+          cd dex_extracted
+          # 循环处理每一个解压出的 DEX 文件
+          for f in classes*.dex; do
+            echo "========================================="
+            echo "Processing $f..."
+            
+            # 单个 DEX 反编译仅消耗极少内存（通常低于 1.5G），能够保障绝对不触发内存溢出
+            jadx -d temp_out --no-res --threads-count 2 "$f" || echo "JADX returned warnings on $f, continuing..."
+            
+            # 如果在此 DEX 中发现了目标核心包，将其物理复制合并到 java_final 目录下
+            if [ -d "temp_out/sources/com/tencent/mobileqq" ]; then
+              echo "Found com.tencent.mobileqq in $f. Merging..."
+              cp -r temp_out/sources/com/tencent/mobileqq/. ../java_final/com/tencent/mobileqq/
+            fi
+            
+            # 及时删除临时反编译目录，保证服务器磁盘不会被撑满
+            rm -rf temp_out
+          done
+          
+          cd ..
+          # 清理临时解出的原 dex 目录
+          rm -rf dex_extracted
+          echo "All DEX files processed and merged successfully."
 
       # ==========================================
       # 6. 打包与上传产物
@@ -141,8 +127,9 @@ jobs:
             echo "Zipping Smali output..."
             zip -r smali_output.zip decompiled_smali
           fi
-          if [ -d "decompiled_java" ]; then
+          if [ -d "java_final" ]; then
             echo "Zipping Java output..."
+            mv java_final decompiled_java
             zip -r java_output.zip decompiled_java
           fi
 
